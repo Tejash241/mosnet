@@ -51,6 +51,8 @@ class DataGenerator(keras.utils.Sequence):
         return X, {'avg': y_mos, 'frame': y_frame}
 
 
+mc = keras.callbacks.ModelCheckpoint('output/weights{epoch+1:02d}.h5', period=1)
+
 mos_list = utils.read_list(os.path.join(DATA_DIR, 'mos_list.txt'))
 print(f'{len(mos_list)} lines read from mos_list.txt')
 train_idx = np.random.randint(0, len(mos_list), int(PERC_TRAIN*len(mos_list)))
@@ -62,7 +64,8 @@ print(f'{len(mos_train)} training and {len(mos_valid)} validation batches separa
 # TODO: Initialize and compile model
 MOSNet = model.CNN()
 model = MOSNet.build()
-
+model.load_weights('output/weights01.h5')
+print('Model loaded')
 
 # TODO: Start fitting model using utils.data_generator
 def loss_avg(y_avg, pred_avg):
@@ -71,11 +74,11 @@ def loss_avg(y_avg, pred_avg):
 
 
 def loss_frame(y_frame, pred_frame, alpha=1):
+    # alpha is defaulted to 1 acc to the paper in section 3.2
     loss_per_frame = alpha * tf.reduce_mean(tf.pow(y_frame - pred_frame, 2), axis=1)
     return tf.reduce_mean(loss_per_frame, axis=0)
 
 
-print(model.outputs)
 model.compile(optimizer='adam', loss={'avg': loss_avg, 'frame': loss_frame})
-history = model.fit(x=mos_train, validation_data=mos_valid)
+history = model.fit(x=mos_train, validation_data=mos_valid, callbacks=[mc], epochs=N_EPOCHS)
 print(history)
