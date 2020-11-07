@@ -40,11 +40,12 @@ def get_spectrograms(sound_file, sr=SAMPLE_RATE, fft_size=FFT_SIZE) -> np.ndarra
         fft_size (int): size of FFT
 
     Returns:
-        np.float32 magnitude matrix of shape (T, 1+n_fft/2)
+        np.float32 magnitude matrix of shape (1, T, 1+n_fft/2)
     """
     samplerate, data = wavfile.read(sound_file)
     _, _, Zxx = signal.stft(data, sr, nfft=fft_size)
-    return Zxx.T  # transposed so that time is first axis, expected shape is (T, 1025)
+    Zxx = Zxx.T # transposed so that time is in first axis
+    return Zxx.reshape(1, Zxx.shape[0], Zxx.shape[1])
 
 
 def read_list(listfile: str) -> List:
@@ -76,7 +77,7 @@ def read_bin(file_path):
         mag_sgram of shape (1, t, SGRAM_DIM) in dict with key 'mag_sgram'
     """
     hf = h5py.File(file_path, 'r')
-    return hf.get('mag_sgram', None)
+    return hf
 
 
 def pad(array, reference_shape):
@@ -90,7 +91,7 @@ def pad(array, reference_shape):
     return result
 
 
-def data_generator(file_list, bin_root, frame=True, batch_size=1):
+def data_generator(file_list, bin_root, index=0, frame=True, batch_size=1):
     """ This function is the generator function called by fit(), which returns
     feature arrays for training
 
@@ -102,52 +103,46 @@ def data_generator(file_list, bin_root, frame=True, batch_size=1):
         bin_root (str): binary file directory
         frame (bool): Determines whether or not to return frame-wise score
     """
-    index = 0
-    while True:
-        # Build list of filenames of file_list, omitting ext, up to batch_size
-        filename = [file_list[index+x].split(',')[0].split('.')[0]
-                    for x in range(batch_size)]
+    # Build list of filenames of file_list, omitting ext, up to batch_size
+    filename = [file_list[index+x].split(',')[0].split('.')[0]
+                for x in range(batch_size)]
 
-        for i in range(len(filename)):
-            # for each filename in batch list
-            all_feat = read_bin(os.path.join(bin_root, filename[i]+'.h5'))
-            sgram = all_feat['mag_sgram']
+    for i in range(len(filename)):
+        # for each filename in batch list
+        all_feat = read_bin(os.path.join(bin_root, filename[i]+'.h5'))
+        sgram = np.array(all_feat['mag_sgram'])
 
-            # the very first feat
-            if i == 0:
-                feat = sgram
-                max_timestep = feat.shape[1]
-            else:
-                if sgram.shape[1] > feat.shape[1]:
-                    # extend all feat in feat
-                    ref_shape = [feat.shape[0], sgram.shape[1], feat.shape[2]]
-                    feat = pad(feat, ref_shape)
-                    feat = np.append(feat, sgram, axis=0)
-                elif sgram.shape[1] < feat.shape[1]:
-                    # extend sgram to feat.shape[1]
-                    ref_shape = [sgram.shape[0], feat.shape[1], feat.shape[2]]
-                    sgram = pad(sgram, ref_shape)
-                    feat = np.append(feat, sgram, axis=0)
-                else:
-                    # same timestep, append all
-                    feat = np.append(feat, sgram, axis=0)
-
-        mos = [float(file_list[x+index].split(',')[1])
-               for x in range(batch_size)]
-        mos = np.asarray(mos).reshape([batch_size])
-        frame_mos = np.array([mos[i]*np.ones([feat.shape[1], 1])
-                              for i in range(batch_size)])
-
-        index += batch_size
-        # ensure next batch won't out of range
-        if index + batch_size >= len(file_list):
-            index = 0
-            random.shuffle(file_list)
-
-        if frame:
-            yield feat, (mos, frame_mos)
+        # the very first feat
+        if i == 0:
+            feat = sgram
+            max_timestep = feat.shape[0]
         else:
-            yield feat, mos
+            if sgram.shape[1] > feat.shape[1]:
+                # extend all feat in feat
+                ref_shape = [feat.shape[0], sgram.shape[1], feat.shape[2]]
+                feat = pad(feat, ref_shape)
+                feat = np.append(feat, sgram, axis=0)
+            elif sgram.shape[1] < feat.shape[1]:
+                # extend sgram to feat.shape[1]
+                ref_shape = [sgram.shape[0], feat.shape[1], feat.shape[2]]
+                sgram = pad(sgram, ref_shape)
+                feat = np.append(feat, sgram, axis=0)
+            else:
+                # same timestep, append all
+                feat = np.append(feat, sgram, axis=0)
+
+    mos = [float(file_list[x+index].split(',')[1])
+           for x in range(batch_size)]
+    mos = np.asarray(mos).reshape([batch_size])
+    frame_mos = np.array([mos[i]*np.ones([feat.shape[1], 1])
+                          for i in range(batch_size)])
+
+    index += batch_size
+
+    if frame:
+        return feat, (mos, frame_mos)
+    else:
+        return feat, mos
 
 
 def extract_to_h5(audio_dir, bin_dir):
